@@ -1,5 +1,29 @@
 import Foundation
 
+struct LocalCallAPIStatus: Encodable {
+    let phase: String
+    let moduleID: String?
+    let number: String?
+    let audioActive: Bool
+    let muted: Bool
+    let isChangingCall: Bool
+    let lastError: String?
+    let lastEndReason: String?
+    let lastEndEvidence: CallEndEvidence?
+
+    init(call: CallSnapshot, isChangingCall: Bool) {
+        phase = call.phase.rawValue
+        moduleID = call.moduleID?.rawValue
+        number = call.number
+        audioActive = call.audioActive
+        muted = call.muted
+        self.isChangingCall = isChangingCall
+        lastError = call.lastError
+        lastEndReason = call.lastEndReason?.rawValue
+        lastEndEvidence = call.lastEndEvidence
+    }
+}
+
 enum LocalCallAPICommand: Equatable {
     case status
     case dial(String)

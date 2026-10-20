@@ -94,24 +94,9 @@ private struct LocalCallAPIActionResponse: Encodable {
     let call: LocalCallAPIStatus
 }
 
-private struct LocalCallAPIStatus: Encodable {
-    let phase: String
-    let moduleID: String?
-    let number: String?
-    let audioActive: Bool
-    let muted: Bool
-    let isChangingCall: Bool
-    let lastError: String?
-
+private extension LocalCallAPIStatus {
     @MainActor init(appState: AppState) {
-        let call = appState.call
-        phase = call.phase.rawValue
-        moduleID = call.moduleID?.rawValue
-        number = call.number
-        audioActive = call.audioActive
-        muted = call.muted
-        isChangingCall = appState.isChangingCall
-        lastError = call.lastError
+        self.init(call: appState.call, isChangingCall: appState.isChangingCall)
     }
 }
 

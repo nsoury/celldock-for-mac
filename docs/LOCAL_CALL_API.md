@@ -72,6 +72,48 @@ Optional `moduleID`, `number`, and `lastError` fields are omitted when absent.
 `phase` is one of `unavailable`, `idle`, `incoming`, `dialing`, `alerting`,
 `active`, `ending`, `recovering`, or `error`.
 
+### End reasons and evidence
+
+Status and successful action snapshots also expose optional `lastEndReason` and
+`lastEndEvidence`. For example, a generic modem release is reported as:
+
+```json
+{
+  "phase": "idle",
+  "audioActive": false,
+  "muted": false,
+  "isChangingCall": false,
+  "lastEndReason": "unknown",
+  "lastEndEvidence": {"source": "modemResultCode", "code": "NO CARRIER"}
+}
+```
+
+| `lastEndReason` | Evidence | Meaning |
+| --- | --- | --- |
+| `localHangup` | `localAction` | CellDock requested hangup and confirmed the call list empty. |
+| `busy` | `modemResultCode`, code `BUSY` | The modem explicitly reported busy. |
+| `noAnswer` | `modemResultCode`, code `NO ANSWER` | The modem explicitly reported no answer. |
+| `noDialTone` | `modemResultCode`, code `NO DIALTONE` or `NO DIAL TONE` | The modem reported no dial tone. |
+| `unknown` | `modemResultCode`, code `NO CARRIER` | The call ended without a specific release cause. |
+| `unknown` | `callListEmpty` | Polling/recovery found the voice call gone without a specific release cause. |
+| `deviceDisconnected` | `deviceDisconnected` | The local module/connection was reset or disconnected. |
+| `failed` | `internalFailure` | CellDock's call setup, media setup, or recovery failed. |
+
+`code` is included only for modem result codes (trimmed and uppercased). A generic
+`NO CARRIER` or empty CLCC list cannot distinguish remote hangup, rejection, a
+powered-off phone, loss of signal, or a network release. The API does not invent
+those distinctions or query vendor-specific release-cause commands. `remoteHangup`
+remains a legacy value for reading existing call history; new generic releases
+are recorded as `unknown` instead.
+
+Late generic release indications do not overwrite a confirmed local hangup or a
+specific modem result such as `NO ANSWER`. Evidence is cleared when a new call
+starts. These fields may appear during cleanup/recovery before the call is
+confirmed ended; check `phase` as well. They describe the current snapshot, not
+an event stream or a persistent per-call result endpoint.
+
+### Action results
+
 Actions return HTTP 200 with `{"accepted":true,"call":{...}}` after the existing
 CellDock operation completes. Dial success means the module accepted the dial
 operation, **not that the recipient answered**. Poll status for `phase: active`
