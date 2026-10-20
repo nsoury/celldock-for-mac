@@ -18,6 +18,7 @@ private struct NetworkModuleRestartContext {
 
 @MainActor
 final class AppState: ObservableObject {
+    lazy var localCallAPIController = LocalCallAPIController(appState: self)
     lazy var socksProxyController = SOCKSProxyController(appState: self)
     lazy var voWiFiController = VoWiFiController(appState: self)
     @Published private(set) var modem = ModemSnapshot()
@@ -468,6 +469,7 @@ final class AppState: ObservableObject {
         guard !started else { return }
         started = true
         SOCKSSignalSafety.install()
+        localCallAPIController.start()
         socksProxyController.start()
         voWiFiController.start()
         modemInventoryService.onDevices = { [weak self] devices in
@@ -487,6 +489,7 @@ final class AppState: ObservableObject {
                 completion(true)
                 return
             }
+            self.localCallAPIController.stop()
             let shutdown = { [weak self] in
                 guard let self else {
                     completion(true)
@@ -2183,52 +2186,87 @@ final class AppState: ObservableObject {
     }
 
     func dial(_ number: String) {
+        dial(number, completion: { _ in })
+    }
+
+    func dial(_ number: String, completion: @escaping (ModemActionResult) -> Void) {
         let moduleID = communicationModuleID()
         guard let service = modemService(for: moduleID) else {
-            presentTransientMessage(L10n.tr("当前通信模组尚未就绪。"), isError: true)
+            let result = ModemActionResult.failure(L10n.tr("当前通信模组尚未就绪。"))
+            show(result)
+            completion(result)
             return
         }
         guard !euiccSnapshot(for: moduleID).isBusy else {
-            presentTransientMessage(L10n.tr("eSIM 操作期间不能拨号。"), isError: true)
+            let result = ModemActionResult.failure(L10n.tr("eSIM 操作期间不能拨号。"))
+            show(result)
+            completion(result)
             return
         }
         guard !call.hasCall else {
-            presentTransientMessage(L10n.tr("已有一路通话，结束后才能使用另一张卡拨号。"), isError: true)
+            let result = ModemActionResult.failure(L10n.tr("已有一路通话，结束后才能使用另一张卡拨号。"))
+            show(result)
+            completion(result)
             return
         }
-        guard !isChangingCall else { return }
+        guard !isChangingCall else {
+            completion(.failure(L10n.tr("通话操作正在进行，请稍后重试。")))
+            return
+        }
         isChangingCall = true
         dismissTransientMessage()
         service.dial(number) { [weak self] result in
             guard let self else { return }
             self.isChangingCall = false
             self.show(result)
+            completion(result)
         }
     }
 
     func answerCall() {
+        answerCall(completion: { _ in })
+    }
+
+    func answerCall(completion: @escaping (ModemActionResult) -> Void) {
         let moduleID = activeCallModuleID ?? call.moduleID
         guard let service = modemService(for: moduleID) else {
-            presentTransientMessage(L10n.tr("来电模组已断开。"), isError: true)
+            let result = ModemActionResult.failure(L10n.tr("来电模组已断开。"))
+            show(result)
+            completion(result)
             return
         }
         guard !euiccSnapshot(for: moduleID).isBusy else {
-            presentTransientMessage(L10n.tr("eSIM 操作期间暂时不能接听。"), isError: true)
+            let result = ModemActionResult.failure(L10n.tr("eSIM 操作期间暂时不能接听。"))
+            show(result)
+            completion(result)
             return
         }
-        guard !isChangingCall else { return }
+        guard !isChangingCall else {
+            completion(.failure(L10n.tr("通话操作正在进行，请稍后重试。")))
+            return
+        }
         isChangingCall = true
         service.answerCall { [weak self] result in
             guard let self else { return }
             self.isChangingCall = false
             self.show(result)
+            completion(result)
         }
     }
 
     func hangUp() {
-        guard !isChangingCall else { return }
+        hangUp(completion: { _ in })
+    }
+
+    func hangUp(completion: @escaping (ModemActionResult) -> Void) {
+        guard !isChangingCall else {
+            completion(.failure(L10n.tr("通话操作正在进行，请稍后重试。")))
+            return
+        }
         guard let service = modemService(for: activeCallModuleID ?? call.moduleID) else {
-            presentTransientMessage(L10n.tr("通话模组已断开。"), isError: true)
+            let result = ModemActionResult.failure(L10n.tr("通话模组已断开。"))
+            show(result)
+            completion(result)
             return
         }
         isChangingCall = true
@@ -2236,6 +2274,7 @@ final class AppState: ObservableObject {
             guard let self else { return }
             self.isChangingCall = false
             self.show(result)
+            completion(result)
         }
     }
 
