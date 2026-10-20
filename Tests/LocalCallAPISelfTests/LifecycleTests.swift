@@ -48,13 +48,15 @@ func testTerminationCancellation() async {
     let coordinator = AppTerminationCoordinator(timeout: 0.05)
     var cleanups = 0
     var cancellations = 0
+    var confirmations = 0
     var replies = 0
     var completeCleanup: ((Bool) -> Void)?
-    coordinator.cleanup = { complete in
+    coordinator.cleanup = { _, complete in
         cleanups += 1
         completeCleanup = complete
     }
     coordinator.onTerminationCancelled = { cancellations += 1 }
+    coordinator.onTerminationConfirmed = { confirmations += 1 }
 
     let failed = await withCheckedContinuation { reply in
         expect(coordinator.beginTermination { result in
@@ -79,7 +81,7 @@ func testTerminationCancellation() async {
         completeCleanup?(true)
     }
     try? await Task.sleep(nanoseconds: 100_000_000)
-    expect(succeeded && cancellations == 1 && replies == 2 && cleanups == 2,
+    expect(succeeded && cancellations == 1 && confirmations == 1 && replies == 2 && cleanups == 2,
            "Successful termination or a stale timeout restarted services")
 
     let timedOut = await withCheckedContinuation { reply in
@@ -95,4 +97,112 @@ func testTerminationCancellation() async {
     try? await Task.sleep(nanoseconds: 20_000_000)
     expect(cancellations == 2 && replies == 3, "Late cleanup repeated cancellation/reply")
     print("Call result initialization and termination cancellation tests passed")
+}
+
+@MainActor
+func testDeferredShutdownCancellation() async {
+    let coordinator = AppTerminationCoordinator(timeout: 0.02)
+    var deferredShutdown: (() -> Void)?
+    var oldCompletion: ((Bool) -> Void)?
+    var shutdowns = 0
+    var restores = 0
+    var apiRunning = true
+    var newCallActive = false
+    coordinator.cleanup = { attempt, complete in
+        apiRunning = false
+        oldCompletion = complete
+        // This is the same gate AppState uses in its recording-idle callback.
+        deferredShutdown = {
+            guard attempt.beginShutdown() else { return }
+            shutdowns += 1
+            newCallActive = false
+            complete(true)
+        }
+    }
+    coordinator.onTerminationCancelled = {
+        restores += 1
+        apiRunning = true
+    }
+    let shouldQuit = await withCheckedContinuation { reply in
+        _ = coordinator.beginTermination { reply.resume(returning: $0) }
+    }
+    expect(!shouldQuit && apiRunning && !coordinator.isTerminationPending,
+           "Timeout before teardown did not resume the app")
+    newCallActive = true
+    deferredShutdown?()
+    oldCompletion?(true)
+    oldCompletion?(false)
+    try? await Task.sleep(nanoseconds: 20_000_000)
+    expect(shutdowns == 0 && newCallActive && restores == 1,
+           "Cancelled recording-idle callback shut down a newer call")
+
+    // A callback from the abandoned attempt must not affect a newer quit.
+    let abandonedShutdown = deferredShutdown
+    let abandonedCompletion = oldCompletion
+    let secondQuit = await withCheckedContinuation { reply in
+        _ = coordinator.beginTermination { reply.resume(returning: $0) }
+        abandonedShutdown?()
+        abandonedCompletion?(true)
+        oldCompletion?(false)
+    }
+    expect(!secondQuit && shutdowns == 0 && newCallActive && restores == 2,
+           "An abandoned attempt affected its successor")
+}
+
+@MainActor
+func testInFlightShutdownCancellation(clean: Bool) async {
+    let coordinator = AppTerminationCoordinator(timeout: 0.02)
+    var completeShutdown: ((Bool) -> Void)?
+    var attempt: AppTerminationAttempt?
+    var apiRunning = true
+    var modulesRunning = [true, true]
+    var restores = 0
+    var confirmations = 0
+    var restored: CheckedContinuation<Void, Never>?
+    var events: [String] = []
+    coordinator.cleanup = { current, complete in
+        attempt = current
+        expect(current.beginShutdown(), "Fresh teardown was refused")
+        expect(!current.beginShutdown(), "Duplicate teardown was admitted")
+        apiRunning = false
+        completeShutdown = complete
+    }
+    coordinator.onTerminationConfirmed = { confirmations += 1 }
+    coordinator.onTerminationCancelled = {
+        restores += 1
+        modulesRunning = [true, true]
+        events.append("restore modules")
+        apiRunning = true
+        events.append("resume API")
+        restored?.resume()
+        restored = nil
+    }
+    let shouldQuit = await withCheckedContinuation { reply in
+        _ = coordinator.beginTermination { reply.resume(returning: $0) }
+    }
+    expect(!shouldQuit && attempt?.isCancelled == true && coordinator.isTerminationPending,
+           "In-flight timeout did not retain the teardown gate")
+    expect(!apiRunning && restores == 0, "API reopened before teardown finished")
+    expect(coordinator.beginTermination { _ in fatalError("Overlapping cancelled quit replied") } == .terminateCancel,
+           "A second quit was admitted during cancelled teardown")
+
+    // Exercise both fully closed modules and a partial shutdown failure.
+    modulesRunning[0] = false
+    events.append("module 1 closed")
+    expect(!apiRunning, "Partial teardown reopened the API")
+    modulesRunning[1] = !clean
+    events.append("module 2 finished")
+    await withCheckedContinuation { reply in
+        restored = reply
+        completeShutdown?(clean)
+    }
+    expect(modulesRunning.allSatisfy { $0 } && apiRunning && !coordinator.isTerminationPending,
+           "Cancelled teardown did not restore all modules before admitting calls")
+    expect(events == ["module 1 closed", "module 2 finished", "restore modules", "resume API"],
+           "Recovery ran before the shutdown side effects were complete")
+    completeShutdown?(true)
+    completeShutdown?(false)
+    try? await Task.sleep(nanoseconds: 20_000_000)
+    expect(restores == 1 && confirmations == 0, "Late teardown completion repeated recovery or confirmed quit")
+    print("Deferred and in-flight shutdown cancellation tests passed")
 }

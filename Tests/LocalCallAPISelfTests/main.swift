@@ -29,6 +29,9 @@ struct LocalCallAPITests {
     @MainActor static func main() async throws {
         try testEndEvidenceAfterInitialization()
         await testTerminationCancellation()
+        await testDeferredShutdownCancellation()
+        await testInFlightShutdownCancellation(clean: true)
+        await testInFlightShutdownCancellation(clean: false)
         // End reasons describe observed evidence, not an inferred human action.
         for (code, reason) in [("NO CARRIER", CallEndReason.unknown), ("BUSY", .busy),
                                ("NO ANSWER", .noAnswer), ("NO DIALTONE", .noDialTone),
@@ -153,13 +156,15 @@ struct LocalCallAPITests {
         expect(try await perform("/api/calls/answer") == 200, "HTTP answer")
         expect(try await perform("/api/calls/hangup") == 409, "HTTP action failure")
         expect(commands == [.dial("123"), .status, .answer, .hangUp], "Exactly one dispatch per request")
-        // Exercise a failed quit against a real listener. The cancellation hook
-        // uses the same stop/start lifecycle as AppState's API controller.
-        let termination = AppTerminationCoordinator(timeout: 2)
+        // A timed-out, in-flight shutdown must keep real HTTP access paused
+        // until the module shutdown callbacks acknowledge completion.
+        let termination = AppTerminationCoordinator(timeout: 0.02)
         let restarted = LocalCallAPIServer(token: "test-token", port: port) { _, complete in
             complete(.json(["resumed": true]))
         }
         var restart: Task<Void, Error>?
+        var didRestore: CheckedContinuation<Void, Never>?
+        var finishShutdown: ((Bool) -> Void)?
         termination.onTerminationCancelled = {
             restart = Task { @MainActor in
                 try await withCheckedThrowingContinuation { (ready: CheckedContinuation<Void, Error>) in
@@ -172,22 +177,29 @@ struct LocalCallAPITests {
                     }
                 }
             }
+            didRestore?.resume()
+            didRestore = nil
         }
-        termination.cleanup = { complete in
+        termination.cleanup = { attempt, complete in
+            expect(attempt.beginShutdown(), "HTTP test teardown was refused")
             server.stop()
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                do {
-                    _ = try await perform("/api/calls/status", method: "GET", body: nil)
-                    fatalError("Listener remained open during termination")
-                } catch { /* Connection refused is expected. */ }
-                complete(false)
-            }
+            finishShutdown = complete
         }
         let shouldQuit = await withCheckedContinuation { reply in
             _ = termination.beginTermination { reply.resume(returning: $0) }
         }
-        expect(!shouldQuit && restart != nil, "Failed quit did not restart the API")
+        expect(!shouldQuit && restart == nil && termination.isTerminationPending,
+               "Timeout reopened HTTP while shutdown could still close modules")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        do {
+            _ = try await perform("/api/calls/status", method: "GET", body: nil)
+            fatalError("HTTP remained available during cancelled teardown")
+        } catch { /* Connection refused is expected. */ }
+        await withCheckedContinuation { reply in
+            didRestore = reply
+            finishShutdown?(false)
+        }
+        expect(restart != nil, "Quiescent shutdown did not restart the API")
         try await restart?.value
         expect(try await perform("/api/calls/status", method: "GET", body: nil) == 200,
                "API did not accept authenticated HTTP after cancelled termination")

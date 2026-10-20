@@ -473,7 +473,7 @@ final class AppState: ObservableObject {
         socksProxyController.start()
         voWiFiController.start()
         modemInventoryService.onDevices = { [weak self] devices in
-            guard let self else { return }
+            guard let self, !AppTerminationCoordinator.shared.isTerminationPending else { return }
             self.discoveredModemDevices = devices
             self.reconcileDiscoveredModuleRoles()
             self.reconcileSecondaryModemServices()
@@ -485,15 +485,26 @@ final class AppState: ObservableObject {
         CommunicationWindowController.shared.configure(appState: self)
         InitialSetupWindowController.shared.configure(appState: self)
         AppTerminationCoordinator.shared.onTerminationCancelled = { [weak self] in
-            self?.localCallAPIController.start()
+            guard let self else { return }
+            self.modemService.start()
+            self.secondaryModemServices.values.forEach { $0.start() }
+            self.modemInventoryService.start()
+            self.modemInventoryService.refresh()
+            self.localCallAPIController.start()
         }
-        AppTerminationCoordinator.shared.cleanup = { [weak self] completion in
+        AppTerminationCoordinator.shared.onTerminationConfirmed = { [weak self] in
+            self?.alertSounds.stopAll()
+            self?.socksProxyController.stop()
+            self?.voWiFiController.stop()
+        }
+        AppTerminationCoordinator.shared.cleanup = { [weak self] attempt, completion in
             guard let self else {
                 completion(true)
                 return
             }
             self.localCallAPIController.stop()
             let shutdown = { [weak self] in
+                guard attempt.beginShutdown() else { return }
                 guard let self else {
                     completion(true)
                     return
@@ -501,9 +512,6 @@ final class AppState: ObservableObject {
                 self.networkModuleRestartTask?.cancel()
                 self.networkModuleRestartTask = nil
                 self.pendingNetworkModuleRestart = nil
-                self.alertSounds.stopAll()
-                self.socksProxyController.stop()
-                self.voWiFiController.stop()
                 self.modemInventoryService.stop()
                 self.shutdownAllModemServices(completion: completion)
             }
@@ -834,8 +842,8 @@ final class AppState: ObservableObject {
 
     private func shutdownAllModemServices(completion: @escaping (Bool) -> Void) {
         let services = [modemService] + Array(secondaryModemServices.values)
-        secondaryModemServices.removeAll()
-        secondaryEUICCServices.removeAll()
+        // Retain the services so a cancelled quit can restart every module after
+        // all shutdown callbacks finish, including modules that closed cleanly.
         guard !services.isEmpty else {
             completion(true)
             return
@@ -1976,6 +1984,7 @@ final class AppState: ObservableObject {
         let installReplacement = { [weak self] in
             guard let self else { return }
             self.secondaryModemServiceRebuilds.remove(locationID)
+            guard !AppTerminationCoordinator.shared.isTerminationPending else { return }
             guard let device = self.discoveredModemDevices.first(where: {
                 $0.locationID == locationID
             }) else {
@@ -2212,7 +2221,7 @@ final class AppState: ObservableObject {
             completion(result)
             return
         }
-        guard !isChangingCall else {
+        guard !isChangingCall, !AppTerminationCoordinator.shared.isTerminationPending else {
             completion(.failure(L10n.tr("通话操作正在进行，请稍后重试。")))
             return
         }
@@ -2244,7 +2253,7 @@ final class AppState: ObservableObject {
             completion(result)
             return
         }
-        guard !isChangingCall else {
+        guard !isChangingCall, !AppTerminationCoordinator.shared.isTerminationPending else {
             completion(.failure(L10n.tr("通话操作正在进行，请稍后重试。")))
             return
         }
@@ -2262,7 +2271,7 @@ final class AppState: ObservableObject {
     }
 
     func hangUp(completion: @escaping (ModemActionResult) -> Void) {
-        guard !isChangingCall else {
+        guard !isChangingCall, !AppTerminationCoordinator.shared.isTerminationPending else {
             completion(.failure(L10n.tr("通话操作正在进行，请稍后重试。")))
             return
         }

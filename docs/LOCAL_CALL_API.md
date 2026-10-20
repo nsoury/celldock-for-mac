@@ -4,7 +4,13 @@ Enable **Settings → Cellular & Communications → Local call API**, then choos
 **Copy API token**. The API is off by default, listens only on `127.0.0.1:7576`,
 and runs while CellDock is running (closing the window does not quit the app).
 If shutdown cleanup fails or times out and quitting is cancelled, the API resumes
-automatically if it is still enabled in Settings.
+automatically if it is still enabled in Settings. A timeout invalidates deferred
+cleanup callbacks, so a late recording completion cannot close a newer call.
+If module shutdown has already started, call actions and API startup stay paused
+until all module shutdown callbacks finish. CellDock then restarts the module
+services and USB discovery before reopening the listener; the modules may still
+need time to reconnect and initialize their SIMs. Additional quit requests are
+cancelled while this in-flight cleanup is settling.
 
 The random bearer token is stored in the macOS Keychain. Treat it as a password:
 any local program holding it can control calls and read the current phone number.

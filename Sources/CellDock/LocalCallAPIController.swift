@@ -24,7 +24,7 @@ final class LocalCallAPIController: ObservableObject {
     }
 
     func start() {
-        guard isEnabled, server == nil else { return }
+        guard isEnabled, server == nil, !AppTerminationCoordinator.shared.isTerminationPending else { return }
         error = nil
         do {
             let token = try LocalCallAPICredentialStore.loadOrCreate()
