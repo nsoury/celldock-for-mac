@@ -113,6 +113,24 @@ struct CallSnapshot: Equatable {
         lastEndEvidence = evidence
     }
 
+    // Re-probing the same module after call cleanup must not erase the result
+    // before API clients can observe it. Active call/media state is still reset.
+    mutating func resetForInitialization(
+        phase: CallPhase,
+        voiceOverUSBSupported: Bool,
+        lastError: String? = nil,
+        controlInterfaceBusy: Bool = false
+    ) {
+        self = Self(
+            phase: phase,
+            voiceOverUSBSupported: voiceOverUSBSupported,
+            lastEndReason: lastEndReason,
+            lastEndEvidence: lastEndEvidence,
+            lastError: lastError,
+            controlInterfaceBusy: controlInterfaceBusy
+        )
+    }
+
     mutating func clearEnd() {
         lastEndReason = nil
         lastEndEvidence = nil

@@ -484,6 +484,9 @@ final class AppState: ObservableObject {
         StandaloneFlowWindowController.shared.configure(appState: self)
         CommunicationWindowController.shared.configure(appState: self)
         InitialSetupWindowController.shared.configure(appState: self)
+        AppTerminationCoordinator.shared.onTerminationCancelled = { [weak self] in
+            self?.localCallAPIController.start()
+        }
         AppTerminationCoordinator.shared.cleanup = { [weak self] completion in
             guard let self else {
                 completion(true)

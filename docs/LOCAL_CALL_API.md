@@ -3,6 +3,8 @@
 Enable **Settings → Cellular & Communications → Local call API**, then choose
 **Copy API token**. The API is off by default, listens only on `127.0.0.1:7576`,
 and runs while CellDock is running (closing the window does not quit the app).
+If shutdown cleanup fails or times out and quitting is cancelled, the API resumes
+automatically if it is still enabled in Settings.
 
 The random bearer token is stored in the macOS Keychain. Treat it as a password:
 any local program holding it can control calls and read the current phone number.
@@ -111,6 +113,8 @@ specific modem result such as `NO ANSWER`. Evidence is cleared when a new call
 starts. These fields may appear during cleanup/recovery before the call is
 confirmed ended; check `phase` as well. They describe the current snapshot, not
 an event stream or a persistent per-call result endpoint.
+Reinitializing the module after cleanup, including voice-runtime initialization
+retries, preserves the last end reason and evidence.
 
 ### Action results
 

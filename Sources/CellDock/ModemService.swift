@@ -2902,7 +2902,7 @@ final class ModemService {
             }
         }
         pcmSessionEnabled = false
-        callSnapshot = CallSnapshot(
+        callSnapshot.resetForInitialization(
             phase: mediaAvailable ? .idle : .unavailable,
             voiceOverUSBSupported: mediaAvailable,
             lastError: mediaAvailable
@@ -2982,7 +2982,7 @@ final class ModemService {
             moduleVoiceRuntime = runtime
             callMediaBackend = .qdcUAC
             pcmSessionEnabled = false
-            callSnapshot = CallSnapshot(
+            callSnapshot.resetForInitialization(
                 phase: .idle,
                 voiceOverUSBSupported: true
             )

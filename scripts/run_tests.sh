@@ -23,6 +23,8 @@ swiftc \
   "$ROOT/Sources/CellDock/SMSPDUDecoder.swift" \
   "$ROOT/Sources/CellDock/LocalCallAPIProtocol.swift" \
   "$ROOT/Sources/CellDock/LocalCallAPIServer.swift" \
+  "$ROOT/Sources/CellDock/AppTerminationCoordinator.swift" \
+  "$ROOT/Tests/LocalCallAPISelfTests/LifecycleTests.swift" \
   "$ROOT/Tests/LocalCallAPISelfTests/main.swift" \
   -o "$ROOT/.build/self-tests/LocalCallAPISelfTests"
 "$ROOT/.build/self-tests/LocalCallAPISelfTests"

@@ -27,6 +27,8 @@ func rejected(_ data: Data, _ status: Int) {
 @main
 struct LocalCallAPITests {
     @MainActor static func main() async throws {
+        try testEndEvidenceAfterInitialization()
+        await testTerminationCancellation()
         // End reasons describe observed evidence, not an inferred human action.
         for (code, reason) in [("NO CARRIER", CallEndReason.unknown), ("BUSY", .busy),
                                ("NO ANSWER", .noAnswer), ("NO DIALTONE", .noDialTone),
@@ -151,12 +153,45 @@ struct LocalCallAPITests {
         expect(try await perform("/api/calls/answer") == 200, "HTTP answer")
         expect(try await perform("/api/calls/hangup") == 409, "HTTP action failure")
         expect(commands == [.dial("123"), .status, .answer, .hangUp], "Exactly one dispatch per request")
-        server.stop()
-        try await Task.sleep(nanoseconds: 100_000_000)
-        do {
-            _ = try await perform("/api/calls/status", method: "GET", body: nil)
-            fatalError("Listener remained open after stop")
-        } catch { /* Connection refused is expected. */ }
+        // Exercise a failed quit against a real listener. The cancellation hook
+        // uses the same stop/start lifecycle as AppState's API controller.
+        let termination = AppTerminationCoordinator(timeout: 2)
+        let restarted = LocalCallAPIServer(token: "test-token", port: port) { _, complete in
+            complete(.json(["resumed": true]))
+        }
+        var restart: Task<Void, Error>?
+        termination.onTerminationCancelled = {
+            restart = Task { @MainActor in
+                try await withCheckedThrowingContinuation { (ready: CheckedContinuation<Void, Error>) in
+                    var finished = false
+                    try! restarted.start { error in
+                        guard !finished else { return }
+                        finished = true
+                        if let error { ready.resume(throwing: NSError(domain: error, code: 1)) }
+                        else { ready.resume() }
+                    }
+                }
+            }
+        }
+        termination.cleanup = { complete in
+            server.stop()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                do {
+                    _ = try await perform("/api/calls/status", method: "GET", body: nil)
+                    fatalError("Listener remained open during termination")
+                } catch { /* Connection refused is expected. */ }
+                complete(false)
+            }
+        }
+        let shouldQuit = await withCheckedContinuation { reply in
+            _ = termination.beginTermination { reply.resume(returning: $0) }
+        }
+        expect(!shouldQuit && restart != nil, "Failed quit did not restart the API")
+        try await restart?.value
+        expect(try await perform("/api/calls/status", method: "GET", body: nil) == 200,
+               "API did not accept authenticated HTTP after cancelled termination")
+        restarted.stop()
         session.invalidateAndCancel()
         print("Local call API protocol and loopback integration tests passed")
     }
